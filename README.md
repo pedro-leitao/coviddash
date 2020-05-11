@@ -30,3 +30,4 @@ And use whatever list of two letter country codes you may wish to display.
 
 ### Example display
 
+![Image screenshot](screenshot.png)
