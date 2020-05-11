@@ -68,6 +68,7 @@ func multipleCountries(w http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
 	countryList := strings.Split(vars["countries"], " ")
 	page := charts.NewPage(charts.RouterOpts{})
+	page.PageTitle = "COVID Dashboard for " + time.Now().Format(time.RFC822)
 	defer req.Body.Close()
 
 	log.Printf("Processing new request from %v\n", req.RemoteAddr)
