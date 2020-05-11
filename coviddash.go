@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -20,7 +19,10 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// RetrievalError is the template text for a retrieval error
 const RetrievalError string = "Could not retrieve for country code"
+
+// ParsingError is the template text for a parsing error
 const ParsingError string = "Could not parse JSON for country code"
 
 type dayOneResults []struct {
@@ -62,46 +64,77 @@ func retrieveDayOneCountryStats(countryCode string) (dayOneResults, error) {
 
 }
 
-func singleCountry(w http.ResponseWriter, req *http.Request) {
+func multipleCountries(w http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
-	results, err := retrieveDayOneCountryStats(vars["code"])
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, err.Error())
-	} else {
-		w.WriteHeader(http.StatusOK)
-		w.Header().Add("content-type", "application/html")
-		renderCountryChart(results, vars["code"], w)
+	countryList := strings.Split(vars["countries"], " ")
+	page := charts.NewPage(charts.RouterOpts{})
+	defer req.Body.Close()
+
+	log.Printf("Processing new request from %v\n", req.RemoteAddr)
+	w.Header().Add("content-type", "text/html")
+	for _, country := range countryList {
+		results, err := retrieveDayOneCountryStats(country)
+		if err != nil {
+			log.Printf("%v", err)
+			continue
+		} else {
+			page.Add(getCountryChart(results, country))
+			log.Printf("Added chart for %v in response\n", country)
+		}
 	}
+	page.Render(w)
+	log.Printf("Finished serving request for %v\n", req.RemoteAddr)
 }
 
-func renderCountryChart(results dayOneResults, countryCode string, w io.Writer) error {
+func getCountryChart(results dayOneResults, countryCode string) *charts.Line {
 	line := charts.NewLine()
-	line.SetGlobalOptions(
-		charts.TitleOpts{Title: "COVID cases for " + strings.ToUpper(results[0].Country)},
-		charts.ToolboxOpts{Show: true},
-	)
+
 	xvalues := []string{}
-	confirmed := []int{}
-	deaths := []int{}
-	// recovered := []int{}
-	// active := []int{}
+	increaseCases := []int{}
+	increaseDeaths := []int{}
+	increaseDeaths = append(increaseDeaths, 0)
+	previousCases := 0
+	previousDeaths := 0
+	deathRate := 0
 	for _, v := range results {
 		xvalues = append(xvalues, v.Date.Format("Jan 02"))
-		confirmed = append(confirmed, v.Confirmed)
-		deaths = append(deaths, v.Deaths)
-		// recovered = append(recovered, v.Recovered)
-		// active = append(active, v.Active)
+		deathRate = (int)((float64)(v.Deaths) / (float64)(v.Confirmed) * 100.0)
+		increaseCases = append(increaseCases, v.Confirmed-previousCases)
+		increaseDeaths = append(increaseDeaths, v.Deaths-previousDeaths)
+		previousCases = v.Confirmed
+		previousDeaths = v.Deaths
 	}
-	line.AddXAxis(xvalues).
-		AddYAxis("Confirmed cases", confirmed, charts.LabelTextOpts{Show: false, Position: "bottom"}).
-		AddYAxis("Deaths", deaths, charts.LabelTextOpts{Show: false, Position: "bottom"})
-	line.SetSeriesOptions(
-		charts.MLNameTypeItem{Name: "Avg", Type: "average"},
-		charts.LineOpts{Smooth: true},
-		charts.MLStyleOpts{Label: charts.LabelTextOpts{Show: true, Formatter: "{a}: {b}"}},
+
+	line.SetGlobalOptions(
+		charts.InitOpts{PageTitle: "COVID Dashboard for " + time.Now().Format(time.RFC822), Width: "1280"},
+		charts.TitleOpts{
+			Title:         "COVID cases for " + strings.ToUpper(results[0].Country),
+			Subtitle:      "Accumulated ☠ rate of " + strconv.Itoa(deathRate) + " in 100",
+			SubtitleStyle: charts.TextStyleOpts{Color: "#909090", FontSize: 16},
+		},
+		charts.ToolboxOpts{Show: false},
+		charts.DataZoomOpts{XAxisIndex: []int{0}, Start: 0, End: 100},
+		charts.YAxisOpts{SplitLine: charts.SplitLineOpts{Show: true}},
 	)
-	return line.Render(w)
+	line.AddXAxis(xvalues).
+		AddYAxis("Δ in deaths", increaseDeaths,
+			charts.MPNameTypeItem{Type: "max", Name: "Maximum"},
+			charts.MPNameTypeItem{Type: "average", Name: "Average"},
+			charts.MPStyleOpts{Label: charts.LabelTextOpts{Show: true}},
+			charts.AreaStyleOpts{Opacity: 0.2},
+			charts.LineOpts{Smooth: true},
+		).
+		AddYAxis("Δ in confirmed cases", increaseCases,
+			charts.MPNameTypeItem{Type: "max", Name: "Maximum"},
+			charts.MPNameTypeItem{Type: "average", Name: "Average"},
+			charts.MPStyleOpts{Label: charts.LabelTextOpts{Show: true}},
+			charts.LineOpts{Smooth: true},
+		).
+		SetSeriesOptions(
+			charts.MLStyleOpts{Label: charts.LabelTextOpts{Show: true, Formatter: "Δ {b}"}},
+		)
+
+	return line
 }
 
 func main() {
@@ -109,12 +142,11 @@ func main() {
 	flag.Parse()
 
 	router := mux.NewRouter()
-	router.HandleFunc("/country/{code}", singleCountry)
+	router.HandleFunc("/countries", multipleCountries).Queries("countries", "{countries}")
 
 	srv := &http.Server{
-		Handler: router,
-		Addr:    ":" + strconv.Itoa(*port),
-		// Good practice: enforce timeouts for servers you create!
+		Handler:      router,
+		Addr:         ":" + strconv.Itoa(*port),
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
