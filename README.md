@@ -20,9 +20,13 @@ Or if with super-user privilidges:
     
 And finally point your browser at:
 
-    http://localhost:4040/countries/uk+se+de+es+it+pt+fr+be+dk+ie 
+    http://localhost:4040/countries?countries=uk+se+de+es+it+pt+fr+be+dk+ie 
 
-or whatever list of two letter country codes you may wish to display.
+or
+
+    http://localhost/countries?countries=uk+se+de+es+it+pt+fr+be+dk+ie
+
+And use whatever list of two letter country codes you may wish to display.
 
 ### Example display
 
