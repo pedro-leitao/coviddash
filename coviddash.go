@@ -78,6 +78,9 @@ func multipleCountries(w http.ResponseWriter, req *http.Request) {
 			log.Printf("%v", err)
 			continue
 		} else {
+			if len(results) == 0 {
+				continue
+			}
 			page.Add(getCountryChart(results, country))
 			log.Printf("Added chart for %v in response\n", country)
 		}
