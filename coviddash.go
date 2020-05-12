@@ -66,6 +66,12 @@ func retrieveDayOneCountryStats(countryCode string) (dayOneResults, error) {
 
 func multipleCountries(w http.ResponseWriter, req *http.Request) {
 	vars := mux.Vars(req)
+	allCountries := []string{}
+	deathRates := []int{}
+	daysToFirstDeath := []int{}
+	totalCases := make(map[string]interface{})
+	totalDeaths := make(map[string]interface{})
+
 	countryList := strings.Split(vars["countries"], " ")
 	page := charts.NewPage(charts.RouterOpts{})
 	page.PageTitle = "COVID Dashboard for " + time.Now().Format(time.RFC822)
@@ -73,6 +79,7 @@ func multipleCountries(w http.ResponseWriter, req *http.Request) {
 
 	log.Printf("Processing new request from %v\n", req.RemoteAddr)
 	w.Header().Add("content-type", "text/html")
+
 	for _, country := range countryList {
 		results, err := retrieveDayOneCountryStats(country)
 		if err != nil {
@@ -82,15 +89,48 @@ func multipleCountries(w http.ResponseWriter, req *http.Request) {
 			if len(results) == 0 {
 				continue
 			}
-			page.Add(getCountryChart(results, country))
+			timeEvolutionChart, dr, dtfd, tc, td, _ := getCountryChart(results, country)
+			allCountries = append(allCountries, strings.ToUpper(country))
+			deathRates = append(deathRates, dr)
+			daysToFirstDeath = append(daysToFirstDeath, dtfd)
+			totalCases[strings.ToUpper(country)] = tc
+			totalDeaths[strings.ToUpper(country)] = td
+			page.Add(timeEvolutionChart)
 			log.Printf("Added chart for %v in response\n", country)
 		}
 	}
+
+	deathRatesByCountryChart := charts.NewEffectScatter()
+	deathRatesByCountryChart.SetGlobalOptions(
+		charts.TitleOpts{Title: "Death Rates/Country"},
+		charts.InitOpts{Width: "1280"},
+	)
+	deathRatesByCountryChart.AddXAxis(allCountries).
+		AddYAxis("Death Rate", deathRates, charts.RippleEffectOpts{Period: 4, Scale: 6, BrushType: "stroke"}).
+		AddYAxis("Days to First Death", daysToFirstDeath, charts.RippleEffectOpts{Period: 4, Scale: 3, BrushType: "fill"})
+	deathRatesByCountryChart.SetSeriesOptions(charts.LabelTextOpts{Show: true, Position: "right"})
+
+	casesByCountryChart := charts.NewPie()
+	casesByCountryChart.SetGlobalOptions(
+		charts.TitleOpts{Title: "Confirmed Cases/Deaths"},
+		charts.InitOpts{Width: "1280"},
+	)
+	casesByCountryChart.Add("cases", totalCases,
+		charts.LabelTextOpts{Show: true, Formatter: "{b}: {c}"},
+		charts.PieOpts{Radius: []string{"20%", "65%"}, RoseType: "area", Center: []string{"25%", "50%"}},
+	)
+	casesByCountryChart.Add("deaths", totalDeaths,
+		charts.LabelTextOpts{Show: true, Formatter: "{b}: {c}"},
+		charts.PieOpts{Radius: []string{"20%", "65%"}, RoseType: "area", Center: []string{"75%", "50%"}},
+	)
+
+	page.Add(deathRatesByCountryChart)
+	page.Add(casesByCountryChart)
 	page.Render(w)
 	log.Printf("Finished serving request for %v\n", req.RemoteAddr)
 }
 
-func getCountryChart(results dayOneResults, countryCode string) *charts.Line {
+func getCountryChart(results dayOneResults, countryCode string) (*charts.Line, int, int, int, int, string) {
 	line := charts.NewLine()
 
 	xvalues := []string{}
@@ -100,13 +140,17 @@ func getCountryChart(results dayOneResults, countryCode string) *charts.Line {
 	previousCases := 0
 	previousDeaths := 0
 	deathRate := 0
-	for _, v := range results {
+	daysToFirstDeath := 0
+	for i, v := range results {
 		xvalues = append(xvalues, v.Date.Format("Jan 02"))
 		deathRate = (int)((float64)(v.Deaths) / (float64)(v.Confirmed) * 100.0)
 		increaseCases = append(increaseCases, v.Confirmed-previousCases)
 		increaseDeaths = append(increaseDeaths, v.Deaths-previousDeaths)
 		previousCases = v.Confirmed
 		previousDeaths = v.Deaths
+		if daysToFirstDeath == 0 && v.Deaths > 0 {
+			daysToFirstDeath = i
+		}
 	}
 
 	line.SetGlobalOptions(
@@ -118,6 +162,7 @@ func getCountryChart(results dayOneResults, countryCode string) *charts.Line {
 		},
 		charts.ToolboxOpts{Show: false},
 		charts.DataZoomOpts{XAxisIndex: []int{0}, Start: 0, End: 100},
+		charts.XAxisOpts{SplitLine: charts.SplitLineOpts{Show: true}},
 		charts.YAxisOpts{SplitLine: charts.SplitLineOpts{Show: true}},
 	)
 	line.AddXAxis(xvalues).
@@ -138,7 +183,7 @@ func getCountryChart(results dayOneResults, countryCode string) *charts.Line {
 			charts.MLStyleOpts{Label: charts.LabelTextOpts{Show: true, Formatter: "Δ {b}"}},
 		)
 
-	return line
+	return line, deathRate, daysToFirstDeath, previousCases, previousDeaths, results[0].Country
 }
 
 func main() {
